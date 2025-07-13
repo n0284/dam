@@ -1,4 +1,8 @@
 use clap::{Parser, Subcommand};
+use regex::Regex;
+use reqwest::blocking::Client;
+use reqwest::blocking::get;
+use scraper::{Html, Selector};
 use std::collections::HashMap;
 
 #[derive(Parser)]
@@ -28,8 +32,10 @@ fn main() {
         Some(Commands::Get { name }) => {
             let dam_ids = get_dam_id_map();
             if let Some(id) = dam_ids.get(name.as_str()) {
-                println!("{}ダムのIDは {} です", name, id);
-                // この ID を使って URL を作ってスクレイピングへ進む
+                match fetch_storage_rate(id) {
+                    Ok(rate) => println!("{}ダムの貯水率は {} です", name, rate),
+                    Err(e) => eprintln!("取得エラー: {}", e),
+                }
             } else {
                 eprintln!("対応していないダム名です: {}", name);
             }
@@ -64,5 +70,54 @@ fn main() {
             ("草木", "1368030375180"),
             // 八ッ場、渡良瀬貯水池は別対応なので省略中
         ])
+    }
+
+    // 指定されたダムIDから貯水率を取得する
+    fn fetch_storage_rate(id: &str) -> Result<String, Box<dyn std::error::Error>> {
+        // 1. HTMLページ取得
+        let url = format!(
+            "https://www1.river.go.jp/cgi-bin/DspDamData.exe?ID={}&KIND=3&PAGE=0",
+            id
+        );
+        let client = Client::builder().build()?;
+        let res = client
+            .get(&url)
+            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .send()?;
+        if !res.status().is_success() {
+            return Err(format!("HTTPエラー: {}", res.status()).into());
+        }
+        let html = res.text()?;
+
+        // 2. .datのhrefを抽出
+        let document = Html::parse_document(&html.to_lowercase());
+        let selector = Selector::parse("a").unwrap();
+
+        let dat_href = document
+            .select(&selector)
+            .filter_map(|e| e.value().attr("href"))
+            .find(|href| href.ends_with(".dat"))
+            .ok_or("datファイルへのリンクが見つかりませんでした")?;
+
+        // 3. 完全URLに変換
+        let dat_url = format!("https://www1.river.go.jp{}", dat_href);
+        println!("datのURL→{}", dat_url);
+
+        // 4. datファイルの中身を取得
+        let dat_text = get(&dat_url)?.text()?;
+
+        // 5. 一番下の行（最新データ）をパース
+        let last_line = dat_text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .last()
+            .ok_or("datファイルが空です")?;
+
+        // 6. カンマ区切りで分割 → 3列目あたりが貯水率
+        let fields: Vec<&str> = last_line.split(',').collect();
+        let rate = fields.get(10).ok_or("貯水率の列が見つかりません")?;
+
+        Ok(rate.to_string())
     }
 }
