@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use regex::Regex;
 use reqwest::blocking::Client;
 use reqwest::blocking::get;
 use scraper::{Html, Selector};
@@ -24,7 +23,7 @@ enum Commands {
     /// 対応しているダム一覧を表示
     List,
 }
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Args::parse();
 
     match &cli.command {
@@ -42,8 +41,8 @@ fn main() {
         }
         // 9ダム合計
         Some(Commands::All) => {
-            println!("9ダム合計の貯水率を取得します…");
-            // TODO: 9ダム分のスクレイピング
+            let allrate = fetch_all_dam_rate()?;
+            println!("9ダム合計の貯水率（前日0時時点）: {}%", allrate);
         }
         // 対応ダム一覧
         Some(Commands::List) => {
@@ -120,4 +119,37 @@ fn main() {
 
         Ok(rate.to_string())
     }
+
+    // 9ダム合計
+    fn fetch_all_dam_rate() -> Result<String, Box<dyn std::error::Error>> {
+        let url = "https://www.waterworks.metro.tokyo.lg.jp/suigen/suigen";
+        let client = Client::builder().build()?;
+
+        let res = client
+            .get(url)
+            .header("User-Agent", "Mozilla/5.0") // 念のため
+            .send()?;
+
+        let body = res.text()?;
+        let document = Html::parse_document(&body);
+
+        // <tr> 全体を探索
+        let tr_selector = Selector::parse("tr").unwrap();
+        let td_selector = Selector::parse("td").unwrap();
+
+        for tr in document.select(&tr_selector) {
+            let tds: Vec<_> = tr.select(&td_selector).collect();
+            if tds.len() >= 5 {
+                let header = tds[0].text().collect::<String>().trim().to_string();
+                if header.contains("以上合計") {
+                    // index 4 が 5番目（0-based）
+                    let rate = tds[5].text().collect::<String>().trim().to_string();
+                    return Ok(rate);
+                }
+            }
+        }
+
+        Err("9ダム合計の貯水率が見つかりませんでした".into())
+    }
+    Ok(())
 }
