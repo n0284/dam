@@ -1,6 +1,7 @@
 {
   "name": "Rust Sandbox on Dev Container",
   "image": "mcr.microsoft.com/devcontainers/rust:latest",
+  "postCreateCommand": "rustup target add aarch64-unknown-linux-gnu && sudo apt update && sudo apt install -y gcc-aarch64-linux-gnu",
   "customizations": {
     "vscode": {
       "extensions": [
